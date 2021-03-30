@@ -6,26 +6,41 @@ import cv2
 from utils import *
 import pickle
 import os
-from model import unet
+from model import *
 from loss import *
 from generate_data_list import generate_data_list
 import time
 from datetime import datetime
 import imageio
-
+import argparse
 import shutil
+from vgg import *
 #slim = tensorflow.contrib.slim
-FLAGS = tf.app.flags.FLAGS
 
-tf.app.flags.DEFINE_string('ckpt_restore_dir', '/home/549/jz1585/0909/2020-09-11-11-06-01/model','ckpt_restore_dir')
+parser = argparse.ArgumentParser()
+parser.add_argument("--checkpoint", help="filename of train_set",default='/scratch/po21/jz1585/1105/2020-11-09-14-30-49/model/')
+
+parser.add_argument("--data_dir", help="filename of train_set",default='/scratch/po21/jz1585/')
+parser.add_argument("--train_set", help="filename of train_set",default='none')
+parser.add_argument("--train_set_label", help="filename of train_set_label", default="none")
+parser.add_argument("--test_set", help="filename of train_set",default="/Google-Bris/test/")
+parser.add_argument("--test_set_label", help="filename of train_set_label", default="/Google-Bris/test-gt/")
+
+parser.add_argument("--vgg_checkpoint", default='/scratch/po21/jz1585/VGG/model-Bris/', help="directory with checkpoints")
+
+
+parser.add_argument("--model", default='FPN_RFA_3', help="model")
+parser.add_argument("--block", type=int,default=4, help="block")
+Config=parser.parse_args()
+
+
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-batch_size = 50
-
-
+batch_size = 27
 IMAGE_SIZE = 256
 
+print()
 
 #generate_data_list(TEST_SET_DIR_solar,TEST_SET_DIR_label)
 
@@ -35,6 +50,13 @@ result_save_dir = 'results'+localtime
 if not os.path.exists(result_save_dir):      
     os.makedirs(result_save_dir) 
   
+TRAIN_SET_DIR_solar =  Config.data_dir + Config.train_set
+TRAIN_SET_DIR_label =  Config.data_dir + Config.train_set_label
+TEST_SET_DIR_solar =  Config.data_dir + Config.test_set
+TEST_SET_DIR_label =  Config.data_dir + Config.test_set_label
+print(TRAIN_SET_DIR_solar,TRAIN_SET_DIR_label,TEST_SET_DIR_solar,TEST_SET_DIR_label)
+
+generate_data_list(TRAIN_SET_DIR_solar,TRAIN_SET_DIR_label,TEST_SET_DIR_solar,TEST_SET_DIR_label)
 
 
 #save_config(ckpt_save_dir,'config.txt',training_config)
@@ -60,10 +82,24 @@ del(test_set_list)
 
 
 with tf.Graph().as_default():
-    image = tf.placeholder(tf.float32, [None, IMAGE_SIZE, IMAGE_SIZE, 3])
+    image = tf.placeholder(tf.float32, [batch_size, IMAGE_SIZE, IMAGE_SIZE, 3])
 
+    vgg = vgg16(image*255)
 
-    Unet = unet(image, block_num = 4)
+    if Config.model =='FPN':
+        model = FPN(image, block_num = Config.block)
+    elif Config.model =='Unet':
+        model = unet(image, block_num = Config.block)
+    elif Config.model =='FPN_RFA_3':
+        model = FPN_RFA_3(image, score = vgg.probs[:,1],block_num = Config.block)
+    elif Config.model =='FPN_RFA_BS':
+        model = FPN_RFA_BS(image, score = vgg.probs[:,1],block_num = Config.block)
+    elif Config.model =='FPN_RFA_BS_2':
+        model = FPN_RFA_BS_2(image, score = vgg.probs[:,1],block_num = Config.block)
+    elif Config.model =='FPN_RFA_BS_3':
+        model = FPN_RFA_BS_3(image, score = vgg.probs[:,1],block_num = Config.block)
+    elif Config.model =='FPN_RFA_BS_4':
+        model = FPN_RFA_BS_4(image, score = vgg.probs[:,1],block_num = Config.block)
 
 
     config = tf.ConfigProto(allow_soft_placement=True)
@@ -74,14 +110,30 @@ with tf.Graph().as_default():
     with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
 
-        saver = tf.train.Saver(tf.global_variables(),max_to_keep = 100)
+    #saver = tf.train.Saver(max_to_keep=100)
+        variables = tf.trainable_variables()
+        #print(variables)
+        variables_model = [v for v in variables if v.name.split('/')[0]=='FPN_RFA_BS']
+        saver = tf.train.Saver(variables_model)
         # restore old checkpoint
-        checkpoint = tf.train.get_checkpoint_state(FLAGS.ckpt_restore_dir)
+        checkpoint = tf.train.get_checkpoint_state(Config.checkpoint)
         if checkpoint and checkpoint.model_checkpoint_path:
             saver.restore(sess, checkpoint.model_checkpoint_path)
             print("Successfully loaded:", checkpoint.model_checkpoint_path)
         else:
-                print("Could not find old network weights")
+            print("Could not find old network weights")
+        
+        #VGG
+        variables_vgg = [v for v in variables if v.name.split('/')[0]!='FPN_RFA_BS']
+        saver2 = tf.train.Saver(variables_vgg)
+        # restore old checkpoint
+        checkpoint = tf.train.get_checkpoint_state(Config.vgg_checkpoint)
+        if checkpoint and checkpoint.model_checkpoint_path:
+            saver2.restore(sess, checkpoint.model_checkpoint_path)
+            print("Successfully loaded VGG:", checkpoint.model_checkpoint_path)
+        else:
+            print("Could not find old network weights")
+
 
         
         batch_num = test_set_size//batch_size
@@ -95,14 +147,13 @@ with tf.Graph().as_default():
                 minibatch.append(element)
                 #print(minibatch)
 
-            image_list = [load_image(d[0],IMAGE_SIZE) for d in minibatch]
+            image_list = [load_image_test(d[0],IMAGE_SIZE) for d in minibatch]
             
             image_batch = np.array(image_list)
 
-            output = sess.run(Unet.finalpre,  feed_dict = {image: image_batch})
+            output,prob = sess.run([model.finalpre,vgg.probs[:,1]], feed_dict = {image: image_batch})
             output = np.array(output)
-            #print(output.shape)            
             for i in range(0,len(output)):
-                print(os.path.basename(minibatch[i][0]))
+                print(os.path.basename(minibatch[i][0]),prob[i])
                 imageio.imwrite(os.path.join(result_save_dir,os.path.basename(minibatch[i][0])),output[i,:,:,0]*255)
                 #misc.imsave(os.path.join(result_save_dir,'ori'+os.path.basename(minibatch[i][0])),image_list[i])

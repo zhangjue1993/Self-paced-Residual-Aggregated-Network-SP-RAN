@@ -30,7 +30,7 @@ parser.add_argument("--test_set_label", help="filename of train_set_label", defa
 parser.add_argument("--aux", help="aux_train or not",default=False)
 parser.add_argument("--aux_train_set", help="filename of aux_train_set",default="/Google-Bris/train0115/train_all/")
 parser.add_argument("--aux_train_set_label", help="filename of aux_train_set_label", default="/Google-Bris/train0115/train_label/")
-parser.add_argument("--new_label_update_dir", help="filename of aux_train_set_label", default="")
+parser.add_argument("--new_label_update_dir", help="filename of aux_train_set_label", default="/scratch/po21/jz1585/1117/label")
 
 
 parser.add_argument("--model", default='FPN_RFA_3', help="model")
@@ -67,7 +67,6 @@ Config=parser.parse_args()
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
 
 
 WT_CRF_loss_config = [{'weight':0.6,'xy':6,'rgb':11},{'weight':0.1,'xy':6},{'weight':0.3,'texture':11}]
